@@ -1,0 +1,377 @@
+// MarviDesk — internal ticketing & helpdesk
+// Postgres + Prisma. See /Users/mazen/.claude/plans for the design.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  CS_AGENT
+  CS_MANAGER
+  OPS
+  FINANCE
+  TECH
+  SALES
+  SYSTEM_ADMIN
+}
+
+enum DepartmentKey {
+  CS
+  OPS
+  FINANCE
+  TECH
+  SALES
+  MANAGEMENT
+}
+
+enum TicketCategory {
+  RETURN_REPLACE
+  REFUND_COMPENSATE
+  TECHNICAL_ISSUE
+  FOLLOW_UP
+  ESCALATION
+}
+
+enum TicketStatus {
+  NEW
+  OPEN
+  IN_PROGRESS
+  PENDING
+  RESOLVED
+  CLOSED
+  REOPENED
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum SlaState {
+  ON_TRACK
+  AT_RISK
+  BREACHED
+}
+
+enum CommentSource {
+  WEB
+  EMAIL
+}
+
+enum EmailDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum TicketLinkType {
+  DUPLICATE_OF
+  RELATED_TO
+  BLOCKS
+}
+
+enum NotificationType {
+  ASSIGNED
+  MENTIONED
+  STATUS_CHANGED
+  NEW_COMMENT
+  ESCALATED
+  SLA_AT_RISK
+  SLA_BREACHED
+  WATCHING
+}
+
+// ---------------------------------------------------------------------------
+// Auth.js models (DB session strategy)
+// ---------------------------------------------------------------------------
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------------------------------------------------------------------------
+// Domain models
+// ---------------------------------------------------------------------------
+
+model Department {
+  id   String        @id @default(cuid())
+  key  DepartmentKey @unique
+  name String
+  slug String        @unique
+
+  users           User[]
+  assignedTickets Ticket[] @relation("AssignedDepartment")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String?
+  email        String   @unique
+  emailVerified DateTime?
+  image        String?
+  role         Role     @default(CS_AGENT)
+  departmentId String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  department Department? @relation(fields: [departmentId], references: [id])
+
+  accounts Account[]
+  sessions Session[]
+
+  createdTickets  Ticket[]       @relation("CreatedBy")
+  assignedTickets Ticket[]       @relation("Assignee")
+  comments        Comment[]
+  watching        Watcher[]
+  mentions        Mention[]
+  notifications   Notification[]
+  activityLogs    ActivityLog[]
+  ticketLinks     TicketLink[]
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  phone     String?
+  notes     String?  @db.Text
+  createdAt DateTime @default(now())
+
+  tickets Ticket[]
+}
+
+model Ticket {
+  id          String         @id @default(cuid())
+  number      Int            @unique @default(autoincrement())
+  subject     String
+  description String         @db.Text
+  status      TicketStatus   @default(NEW)
+  priority    Priority       @default(NORMAL)
+  category    TicketCategory
+
+  customerId           String?
+  createdById          String
+  assigneeId           String?
+  assignedDepartmentId String
+
+  // SLA
+  slaState              SlaState  @default(ON_TRACK)
+  slaFirstResponseDueAt DateTime?
+  firstRespondedAt      DateTime?
+  slaResolutionDueAt    DateTime?
+
+  // Lifecycle timestamps
+  resolvedAt DateTime?
+  closedAt   DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  // Merge redirect
+  mergedIntoTicketId String?
+  mergedInto         Ticket?  @relation("Merge", fields: [mergedIntoTicketId], references: [id])
+  mergedFrom         Ticket[] @relation("Merge")
+
+  customer           Customer?   @relation(fields: [customerId], references: [id])
+  createdBy          User        @relation("CreatedBy", fields: [createdById], references: [id])
+  assignee           User?       @relation("Assignee", fields: [assigneeId], references: [id])
+  assignedDepartment Department  @relation("AssignedDepartment", fields: [assignedDepartmentId], references: [id])
+
+  comments     Comment[]
+  attachments  Attachment[]
+  labels       TicketLabel[]
+  watchers     Watcher[]
+  notifications Notification[]
+  activityLogs ActivityLog[]
+  emails       EmailMessage[]
+
+  outgoingLinks TicketLink[] @relation("SourceTicket")
+  incomingLinks TicketLink[] @relation("TargetTicket")
+
+  @@index([assignedDepartmentId, status])
+  @@index([createdById])
+  @@index([assigneeId])
+  @@index([slaState])
+}
+
+model Comment {
+  id             String        @id @default(cuid())
+  ticketId       String
+  authorId       String?
+  body           String        @db.Text
+  isInternalNote Boolean       @default(false)
+  source         CommentSource @default(WEB)
+  parentCommentId String?
+  createdAt      DateTime      @default(now())
+
+  ticket   Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author   User?     @relation(fields: [authorId], references: [id])
+  parent   Comment?  @relation("CommentReplies", fields: [parentCommentId], references: [id])
+  replies  Comment[] @relation("CommentReplies")
+
+  attachments Attachment[]
+  mentions    Mention[]
+  notifications Notification[]
+
+  @@index([ticketId])
+}
+
+model Attachment {
+  id        String   @id @default(cuid())
+  ticketId  String?
+  commentId String?
+  fileKey   String
+  fileName  String
+  mime      String
+  size      Int
+  createdAt DateTime @default(now())
+
+  ticket  Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  comment Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+}
+
+model Label {
+  id    String @id @default(cuid())
+  name  String @unique
+  color String @default("#6b7280")
+
+  tickets TicketLabel[]
+}
+
+model TicketLabel {
+  ticketId String
+  labelId  String
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  label  Label  @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([ticketId, labelId])
+}
+
+model Watcher {
+  ticketId String
+  userId   String
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([ticketId, userId])
+}
+
+model Mention {
+  id        String   @id @default(cuid())
+  commentId String
+  userId    String
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  ticketId  String?
+  commentId String?
+  message   String
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ticket  Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  comment Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  ticketId  String
+  actorId   String?
+  action    String
+  fromValue String?
+  toValue   String?
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  actor  User?  @relation(fields: [actorId], references: [id])
+
+  @@index([ticketId, createdAt])
+}
+
+model EmailMessage {
+  id        String         @id @default(cuid())
+  ticketId  String
+  direction EmailDirection
+  messageId String         @unique
+  inReplyTo String?
+  raw       String?        @db.Text
+  createdAt DateTime       @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+}
+
+model TicketLink {
+  id             String         @id @default(cuid())
+  sourceTicketId String
+  targetTicketId String
+  type           TicketLinkType
+  createdById    String
+  createdAt      DateTime       @default(now())
+
+  source    Ticket @relation("SourceTicket", fields: [sourceTicketId], references: [id], onDelete: Cascade)
+  target    Ticket @relation("TargetTicket", fields: [targetTicketId], references: [id], onDelete: Cascade)
+  createdBy User   @relation(fields: [createdById], references: [id])
+
+  @@unique([sourceTicketId, targetTicketId, type])
+}
+
+model SlaPolicy {
+  id               String   @id @default(cuid())
+  priority         Priority @unique
+  firstResponseMins Int
+  resolutionMins   Int
+}

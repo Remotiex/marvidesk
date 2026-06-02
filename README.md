@@ -1,36 +1,91 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# MarviDesk
 
-## Getting Started
+Internal ticketing & helpdesk. Customer Support agents create categorized
+tickets that are auto-routed to the owning department (Operations, Finance,
+Tech, Sales) or escalated to the CS Manager. Resolving teams work tickets in
+their own scoped queue; everyone stays in sync through comments, @mentions,
+watchers, in-app + email notifications, and an immutable audit trail.
 
-First, run the development server:
+## Stack
+
+- **Next.js 16** (App Router, TypeScript) + **Tailwind v4**
+- **PostgreSQL 16** + **Prisma 6**
+- **Auth.js v5** — Google + Microsoft Entra SSO (plus a dev-only email login)
+- **BullMQ + Redis** — email + SLA background jobs
+- **Nodemailer (SMTP)** outbound, generic inbound webhook (Postmark-compatible)
+- **S3 / MinIO** — attachments
+- **Docker Compose** for local services & single-VPS deploy
+
+## Local development
 
 ```bash
+# 1. Start backing services (Postgres, Redis, MinIO, Mailpit)
+docker compose up -d postgres redis minio mailpit
+
+# 2. Configure env
+cp .env.example .env   # already generated with secrets in this repo
+
+# 3. DB schema + seed (6 departments, 10 users, SLA policies, labels, demo tickets)
+npm run db:push
+npm run db:seed
+npm run setup:s3       # create the attachments bucket
+
+# 4. Run the app and the worker (two terminals)
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run worker
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000. In development, sign in with the **Dev login** using
+a seeded email — e.g. `admin@marvidesk.test`, `manager@marvidesk.test`,
+`cs1@marvidesk.test`, `ops@marvidesk.test`, `finance@marvidesk.test`,
+`tech1@marvidesk.test`, `sales@marvidesk.test`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Mailpit web UI (sent emails): http://localhost:8025
+- MinIO console: http://localhost:9101
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Roles & access
 
-## Learn More
+| Role | Sees | Can |
+| --- | --- | --- |
+| CS Agent | tickets they created | create + route tickets |
+| CS Manager | all CS-created tickets + own assignments | oversight dashboard; owns escalations |
+| OPS / FINANCE / TECH / SALES | only their department's tickets | update status, comment, internal notes |
+| System Admin | everything | manage users, labels, SLA policies |
 
-To learn more about Next.js, take a look at the following resources:
+Visibility is enforced by `ticketScope()` in `src/lib/access.ts`, ANDed into
+every query — so a user can't reach another department's ticket even by direct
+ID.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Email
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Outbound**: notifications (assignment, mention, status change, new comment,
+  SLA, escalation) are queued and sent by the worker with a per-ticket
+  `reply+<ticketId>@INBOUND_EMAIL_DOMAIN` reply-to.
+- **Inbound**: point your provider's inbound webhook at
+  `POST /api/inbound-email` with header `x-webhook-secret: $INBOUND_WEBHOOK_SECRET`.
+  Replies are matched to the ticket via the reply token, appended as a comment,
+  and de-duplicated on `MessageID`.
 
-## Deploy on Vercel
+## SLAs
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+`SlaPolicy` defines first-response and resolution targets per priority
+(admin-editable at `/admin/sla`). The worker recomputes SLA state every 5
+minutes; tickets flip to **At risk** / **Breached** and a breach auto-escalates
+(raises priority + notifies the CS Manager).
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Tests
+
+```bash
+npm test          # vitest: routing map, SLA derivation, RBAC scoping
+npm run typecheck
+npx tsx --env-file=.env scripts/verify.ts   # end-to-end service smoke test (needs DB+Redis)
+```
+
+## Production (single VPS)
+
+1. Set real `AUTH_GOOGLE_*` / `AUTH_MICROSOFT_ENTRA_ID_*`, SMTP, S3 and
+   `APP_URL` in `.env` (the dev login is disabled when `NODE_ENV=production`).
+2. Edit `Caddyfile` with your domain.
+3. Uncomment the `web` / `worker` / `caddy` services in `docker-compose.yml` and
+   `docker compose up -d --build`.
+4. Run migrations/seed against the prod DB (`npm run db:push`, `npm run db:seed`).

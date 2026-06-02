@@ -1,0 +1,5 @@
+# Replace with your domain for production TLS.
+marvidesk.example.com {
+	encode gzip
+	reverse_proxy web:3000
+}

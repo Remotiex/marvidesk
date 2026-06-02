@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: marvidesk
+      POSTGRES_PASSWORD: marvidesk
+      POSTGRES_DB: marvidesk
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marvidesk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - miniodata:/data
+    ports:
+      - "9100:9000"
+      - "9101:9001"
+
+  # Mailpit: local SMTP sink + web UI for testing outbound email in dev.
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # web UI
+
+  # --- Application services (used for VPS deploy; commented for local dev) ---
+  # web:
+  #   build: .
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   depends_on: [postgres, redis, minio]
+  #   command: ["node", "server.js"]
+  #
+  # worker:
+  #   build: .
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   depends_on: [postgres, redis]
+  #   command: ["node", "dist/worker.js"]
+  #
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   ports: ["80:80", "443:443"]
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile
+  #     - caddydata:/data
+  #   depends_on: [web]
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  caddydata:
