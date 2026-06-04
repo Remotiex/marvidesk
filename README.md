@@ -6,6 +6,32 @@ Tech, Sales) or escalated to the CS Manager. Resolving teams work tickets in
 their own scoped queue; everyone stays in sync through comments, @mentions,
 watchers, in-app + email notifications, and an immutable audit trail.
 
+## Screenshots
+
+### Dashboard
+Oversight across the team's tickets — open/at-risk/breached/stale stat cards,
+breakdowns by status and department, and SLA-breached / stale queues.
+
+![Dashboard](readme_resources/Dashboard.png)
+
+### All Tickets
+Searchable, faceted ticket list with status, priority and SLA badges, plus the
+in-app notification center.
+
+![All Tickets](readme_resources/All_Tickets.png)
+
+### New Ticket
+Create a ticket with a rich-text description, category-based auto-routing (with
+manual override), reference ID, assignee, and customer details.
+
+![New Ticket](readme_resources/New_Ticket.png)
+
+### Administration
+Manage users, roles & permissions, departments, statuses, categories, labels
+and SLA policies — everything is configurable.
+
+![Administration](readme_resources/Administration.png)
+
 ## Stack
 
 - **Next.js 16** (App Router, TypeScript) + **Tailwind v4**
