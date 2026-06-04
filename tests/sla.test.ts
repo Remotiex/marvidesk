@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { computeDueDates, deriveSlaState } from "@/lib/sla";
-import { SlaState, TicketStatus } from "@prisma/client";
+import { SlaState } from "@prisma/client";
 
 describe("computeDueDates", () => {
   it("adds the configured minutes to the start time", () => {
@@ -20,7 +20,7 @@ describe("deriveSlaState", () => {
   it("is ON_TRACK when deadlines are comfortably ahead", () => {
     expect(
       deriveSlaState({
-        status: TicketStatus.OPEN,
+        isTerminal: false,
         firstRespondedAt: null,
         slaFirstResponseDueAt: new Date("2026-01-01T18:00:00Z"),
         slaResolutionDueAt: new Date("2026-01-02T12:00:00Z"),
@@ -32,7 +32,7 @@ describe("deriveSlaState", () => {
   it("is AT_RISK within an hour of a deadline", () => {
     expect(
       deriveSlaState({
-        status: TicketStatus.OPEN,
+        isTerminal: false,
         firstRespondedAt: null,
         slaFirstResponseDueAt: new Date("2026-01-01T12:30:00Z"),
         slaResolutionDueAt: new Date("2026-01-02T12:00:00Z"),
@@ -44,7 +44,7 @@ describe("deriveSlaState", () => {
   it("is BREACHED once a deadline passes unmet", () => {
     expect(
       deriveSlaState({
-        status: TicketStatus.OPEN,
+        isTerminal: false,
         firstRespondedAt: null,
         slaFirstResponseDueAt: new Date("2026-01-01T11:00:00Z"),
         slaResolutionDueAt: new Date("2026-01-02T12:00:00Z"),
@@ -56,7 +56,7 @@ describe("deriveSlaState", () => {
   it("ignores the first-response deadline once a response exists", () => {
     expect(
       deriveSlaState({
-        status: TicketStatus.OPEN,
+        isTerminal: false,
         firstRespondedAt: new Date("2026-01-01T10:00:00Z"),
         slaFirstResponseDueAt: new Date("2026-01-01T11:00:00Z"), // passed but met
         slaResolutionDueAt: new Date("2026-01-02T12:00:00Z"),
@@ -68,7 +68,7 @@ describe("deriveSlaState", () => {
   it("is always ON_TRACK for resolved/closed tickets", () => {
     expect(
       deriveSlaState({
-        status: TicketStatus.RESOLVED,
+        isTerminal: true,
         firstRespondedAt: null,
         slaFirstResponseDueAt: new Date("2026-01-01T01:00:00Z"),
         slaResolutionDueAt: new Date("2026-01-01T02:00:00Z"),

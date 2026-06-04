@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { Priority, TicketCategory, TicketLinkType, TicketStatus } from "@prisma/client";
+import { Priority, TicketLinkType } from "@prisma/client";
 import { requireUser, canCreateTicket } from "@/lib/rbac";
 import {
   addComment,
@@ -24,10 +24,14 @@ export async function createTicketAction(formData: FormData) {
   const ticket = await createTicket(user, {
     subject: String(formData.get("subject") ?? ""),
     description: String(formData.get("description") ?? ""),
-    category: formData.get("category") as TicketCategory,
+    referenceId: String(formData.get("referenceId") ?? "") || undefined,
+    categoryId: String(formData.get("categoryId") ?? ""),
     priority: (formData.get("priority") as Priority) ?? Priority.NORMAL,
+    departmentId: String(formData.get("departmentId") ?? "") || undefined,
+    assigneeId: String(formData.get("assigneeId") ?? "") || undefined,
     customerName: String(formData.get("customerName") ?? "") || undefined,
     customerEmail: String(formData.get("customerEmail") ?? "") || undefined,
+    customerPhone: String(formData.get("customerPhone") ?? "") || undefined,
     labelIds,
   });
 
@@ -59,7 +63,7 @@ export async function changeStatusAction(formData: FormData) {
   await changeStatus(
     user,
     String(formData.get("ticketId")),
-    formData.get("status") as TicketStatus,
+    String(formData.get("statusId")),
   );
   revalidatePath(`/tickets/${String(formData.get("number"))}`);
 }
@@ -84,7 +88,7 @@ export async function assignAction(formData: FormData) {
 export async function routeAction(formData: FormData) {
   const user = await requireUser();
   await routeTicket(user, String(formData.get("ticketId")), {
-    category: (formData.get("category") as TicketCategory) || undefined,
+    categoryId: String(formData.get("categoryId") || "") || undefined,
     departmentId: String(formData.get("departmentId") || "") || undefined,
   });
   revalidatePath(`/tickets/${String(formData.get("number"))}`);

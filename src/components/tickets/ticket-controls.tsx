@@ -1,9 +1,9 @@
 "use client";
 
-import { Priority, TicketCategory, TicketStatus } from "@prisma/client";
+import { Priority } from "@prisma/client";
 import { Select } from "@/components/ui/primitives";
 import { Button } from "@/components/ui/button";
-import { STATUS_LABEL, PRIORITY_LABEL, CATEGORY_LABEL, DEPARTMENT_LABEL } from "@/lib/domain";
+import { PRIORITY_LABEL } from "@/lib/domain";
 import {
   assignAction,
   changePriorityAction,
@@ -14,17 +14,20 @@ import {
   mergeAction,
 } from "@/app/(portal)/tickets/actions";
 
+type Option = { id: string; name: string };
+
 type Props = {
   ticketId: string;
   number: number;
-  status: TicketStatus;
+  statusId: string;
   priority: Priority;
-  category: TicketCategory;
+  categoryId: string;
   assigneeId: string | null;
   isWatching: boolean;
   canRoute: boolean;
+  statuses: Option[];
+  categories: Option[];
   users: { id: string; name: string }[];
-  departments: { id: string; key: keyof typeof DEPARTMENT_LABEL }[];
 };
 
 function submitOnChange(e: React.ChangeEvent<HTMLSelectElement>) {
@@ -44,9 +47,9 @@ export function TicketControls(p: Props) {
       <form action={changeStatusAction}>
         {hidden}
         <label className="text-xs font-medium text-muted">Status</label>
-        <Select name="status" defaultValue={p.status} onChange={submitOnChange}>
-          {Object.entries(STATUS_LABEL).map(([k, v]) => (
-            <option key={k} value={k}>{v}</option>
+        <Select name="statusId" defaultValue={p.statusId} onChange={submitOnChange}>
+          {p.statuses.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
           ))}
         </Select>
       </form>
@@ -76,9 +79,9 @@ export function TicketControls(p: Props) {
         <form action={routeAction}>
           {hidden}
           <label className="text-xs font-medium text-muted">Category / route</label>
-          <Select name="category" defaultValue={p.category} onChange={submitOnChange}>
-            {Object.entries(CATEGORY_LABEL).map(([k, v]) => (
-              <option key={k} value={k}>{v}</option>
+          <Select name="categoryId" defaultValue={p.categoryId} onChange={submitOnChange}>
+            {p.categories.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </Select>
         </form>

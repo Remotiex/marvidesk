@@ -3,14 +3,14 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import Google from "next-auth/providers/google";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 import Credentials from "next-auth/providers/credentials";
-import { Role } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import type { SessionRole } from "@/lib/access";
 
 declare module "next-auth" {
   interface Session {
     user: {
       id: string;
-      role: Role;
+      role: SessionRole | null;
       departmentId: string | null;
     } & DefaultSession["user"];
   }
@@ -66,12 +66,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (token.email) {
         const dbUser = await prisma.user.findUnique({
           where: { email: token.email },
-          select: { id: true, role: true, departmentId: true },
+          select: { id: true, departmentId: true, role: true },
         });
         if (dbUser) {
           token.uid = dbUser.id;
-          token.role = dbUser.role;
           token.departmentId = dbUser.departmentId;
+          token.role = dbUser.role
+            ? {
+                id: dbUser.role.id,
+                name: dbUser.role.name,
+                scope: dbUser.role.scope,
+                canCreateTickets: dbUser.role.canCreateTickets,
+                canRoute: dbUser.role.canRoute,
+                canViewDashboard: dbUser.role.canViewDashboard,
+                canAdminister: dbUser.role.canAdminister,
+                isEscalationAssignee: dbUser.role.isEscalationAssignee,
+              }
+            : null;
         }
       }
       return token;
@@ -79,7 +90,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async session({ session, token }) {
       if (session.user) {
         session.user.id = (token.uid as string) ?? "";
-        session.user.role = (token.role as Role) ?? Role.CS_AGENT;
+        session.user.role = (token.role as SessionRole | null) ?? null;
         session.user.departmentId = (token.departmentId as string | null) ?? null;
       }
       return session;

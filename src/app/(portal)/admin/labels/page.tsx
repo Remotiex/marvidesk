@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { Card, CardBody, CardHeader, Input } from "@/components/ui/primitives";
 import { Button } from "@/components/ui/button";
 import { LabelChip } from "@/components/ui/badges";
-import { createLabelAction, deleteLabelAction } from "@/app/(portal)/admin/actions";
+import { upsertLabelAction, deleteLabelAction } from "@/app/(portal)/admin/actions";
 
 export default async function AdminLabelsPage() {
   const labels = await prisma.label.findMany({ orderBy: { name: "asc" } });
@@ -11,7 +11,7 @@ export default async function AdminLabelsPage() {
       <Card>
         <CardHeader><span className="text-sm font-medium">Add label</span></CardHeader>
         <CardBody>
-          <form action={createLabelAction} className="flex items-end gap-2">
+          <form action={upsertLabelAction} className="flex items-end gap-2">
             <div className="w-56">
               <label className="text-xs text-muted">Name</label>
               <Input name="name" required />
@@ -28,8 +28,14 @@ export default async function AdminLabelsPage() {
         <CardHeader><span className="text-sm font-medium">Labels</span></CardHeader>
         <CardBody className="space-y-2">
           {labels.map((l) => (
-            <div key={l.id} className="flex items-center justify-between border-b border-border pb-2">
+            <div key={l.id} className="flex items-center gap-2 border-b border-border pb-2">
               <LabelChip name={l.name} color={l.color} />
+              <form action={upsertLabelAction} className="flex items-end gap-2">
+                <input type="hidden" name="id" value={l.id} />
+                <Input name="name" defaultValue={l.name} className="w-44" />
+                <Input name="color" type="color" defaultValue={l.color} className="w-14 p-1" />
+                <Button type="submit" size="sm" variant="outline">Save</Button>
+              </form>
               <form action={deleteLabelAction}>
                 <input type="hidden" name="id" value={l.id} />
                 <Button type="submit" size="sm" variant="ghost">Delete</Button>

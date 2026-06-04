@@ -9,7 +9,7 @@ import { PriorityBadge, SlaBadge, StatusBadge, LabelChip } from "@/components/ui
 import { TicketControls } from "@/components/tickets/ticket-controls";
 import { CommentForm } from "@/components/tickets/comment-form";
 import { AttachmentUploader } from "@/components/tickets/attachment-uploader";
-import { CATEGORY_LABEL, DEPARTMENT_LABEL } from "@/lib/domain";
+import { RichText } from "@/components/ui/rich-text";
 
 export default async function TicketDetailPage({
   params,
@@ -21,17 +21,20 @@ export default async function TicketDetailPage({
   const ticket = await getTicketForUser(user, Number(number));
   if (!ticket) notFound();
 
-  const users = await prisma.user.findMany({
-    where: { isActive: true },
-    orderBy: { name: "asc" },
-    select: { id: true, name: true, email: true },
-  });
-  const departments = await prisma.department.findMany();
+  const [users, statuses, categories] = await Promise.all([
+    prisma.user.findMany({
+      where: { isActive: true },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, email: true },
+    }),
+    prisma.status.findMany({ orderBy: { order: "asc" } }),
+    prisma.category.findMany({ orderBy: { order: "asc" } }),
+  ]);
   const isWatching = ticket.watchers.some((w) => w.userId === user.id);
   const mentionUsers = users.map((u) => ({ id: u.id, name: u.name ?? u.email }));
 
   return (
-    <div className="grid grid-cols-[1fr_280px] gap-6">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_300px]">
       <div className="space-y-4">
         <div>
           <Link href="/tickets" className="text-sm text-muted hover:underline">
@@ -46,7 +49,8 @@ export default async function TicketDetailPage({
             <PriorityBadge priority={ticket.priority} />
             <SlaBadge state={ticket.slaState} />
             <span className="text-xs text-muted self-center">
-              {CATEGORY_LABEL[ticket.category]} · {DEPARTMENT_LABEL[ticket.assignedDepartment.key]}
+              {ticket.category.name} · {ticket.assignedDepartment.name}
+              {ticket.referenceId && <> · Ref: {ticket.referenceId}</>}
             </span>
           </div>
           {ticket.mergedIntoTicketId && (
@@ -64,7 +68,7 @@ export default async function TicketDetailPage({
             </div>
           </CardHeader>
           <CardBody>
-            <p className="whitespace-pre-wrap text-sm">{ticket.description}</p>
+            <RichText html={ticket.description} />
             {ticket.attachments.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {ticket.attachments.map((a) => (
@@ -153,14 +157,15 @@ export default async function TicketDetailPage({
             <TicketControls
               ticketId={ticket.id}
               number={ticket.number}
-              status={ticket.status}
+              statusId={ticket.statusId}
               priority={ticket.priority}
-              category={ticket.category}
+              categoryId={ticket.categoryId}
               assigneeId={ticket.assigneeId}
               isWatching={isWatching}
               canRoute={canRoute(user)}
+              statuses={statuses.map((s) => ({ id: s.id, name: s.name }))}
+              categories={categories.map((c) => ({ id: c.id, name: c.name }))}
               users={mentionUsers}
-              departments={departments.map((d) => ({ id: d.id, key: d.key }))}
             />
           </CardBody>
         </Card>
@@ -168,8 +173,10 @@ export default async function TicketDetailPage({
         <Card>
           <CardHeader><span className="text-sm font-medium">Details</span></CardHeader>
           <CardBody className="space-y-2 text-sm">
+            <Detail label="Reference" value={ticket.referenceId ?? "—"} />
             <Detail label="Customer" value={ticket.customer?.name ?? "—"} />
             <Detail label="Customer email" value={ticket.customer?.email ?? "—"} />
+            <Detail label="Customer mobile" value={ticket.customer?.phone ?? "—"} />
             <Detail
               label="First response due"
               value={ticket.slaFirstResponseDueAt ? format(ticket.slaFirstResponseDueAt, "PPp") : "—"}

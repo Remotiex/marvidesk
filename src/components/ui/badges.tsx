@@ -1,12 +1,14 @@
-import { Priority, SlaState, TicketStatus } from "@prisma/client";
-import { PRIORITY_LABEL, STATUS_LABEL } from "@/lib/domain";
+import { Priority, SlaState } from "@prisma/client";
+import { PRIORITY_LABEL } from "@/lib/domain";
 import { cn } from "@/lib/utils";
 
 function Pill({
   className,
+  style,
   children,
 }: {
   className?: string;
+  style?: React.CSSProperties;
   children: React.ReactNode;
 }) {
   return (
@@ -15,21 +17,12 @@ function Pill({
         "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
         className,
       )}
+      style={style}
     >
       {children}
     </span>
   );
 }
-
-const STATUS_STYLES: Record<TicketStatus, string> = {
-  NEW: "bg-slate-100 text-slate-700",
-  OPEN: "bg-blue-100 text-blue-700",
-  IN_PROGRESS: "bg-amber-100 text-amber-700",
-  PENDING: "bg-purple-100 text-purple-700",
-  RESOLVED: "bg-green-100 text-green-700",
-  CLOSED: "bg-slate-200 text-slate-600",
-  REOPENED: "bg-orange-100 text-orange-700",
-};
 
 const PRIORITY_STYLES: Record<Priority, string> = {
   LOW: "bg-slate-100 text-slate-600",
@@ -44,8 +37,17 @@ const SLA_STYLES: Record<SlaState, string> = {
   BREACHED: "bg-red-100 text-red-700",
 };
 
-export function StatusBadge({ status }: { status: TicketStatus }) {
-  return <Pill className={STATUS_STYLES[status]}>{STATUS_LABEL[status]}</Pill>;
+/** Status is configurable, so its color comes from the DB record. */
+export function StatusBadge({
+  status,
+}: {
+  status: { name: string; color: string };
+}) {
+  return (
+    <Pill style={{ backgroundColor: `${status.color}22`, color: status.color }}>
+      {status.name}
+    </Pill>
+  );
 }
 
 export function PriorityBadge({ priority }: { priority: Priority }) {

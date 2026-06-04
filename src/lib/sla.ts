@@ -1,5 +1,5 @@
-import { Priority, Prisma, SlaState, TicketStatus } from "@prisma/client";
-import { DEFAULT_SLA, TERMINAL_STATUSES } from "@/lib/domain";
+import { Priority, Prisma, SlaState } from "@prisma/client";
+import { DEFAULT_SLA } from "@/lib/domain";
 
 type Tx = Prisma.TransactionClient;
 
@@ -25,14 +25,14 @@ export function computeDueDates(
  * earliest remaining deadline; BREACHED once a deadline passes unmet.
  */
 export function deriveSlaState(params: {
-  status: TicketStatus;
+  isTerminal: boolean; // status is RESOLVED/CLOSED → SLA clock stops
   firstRespondedAt: Date | null;
   slaFirstResponseDueAt: Date | null;
   slaResolutionDueAt: Date | null;
   now?: Date;
 }): SlaState {
   const now = params.now ?? new Date();
-  if (TERMINAL_STATUSES.includes(params.status)) return SlaState.ON_TRACK;
+  if (params.isTerminal) return SlaState.ON_TRACK;
 
   const deadlines: Date[] = [];
   if (!params.firstRespondedAt && params.slaFirstResponseDueAt) {

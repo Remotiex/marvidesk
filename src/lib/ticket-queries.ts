@@ -1,11 +1,11 @@
-import { Prisma, Priority, TicketCategory, TicketStatus } from "@prisma/client";
+import { Prisma, Priority } from "@prisma/client";
 import { SessionUser, ticketScope } from "@/lib/rbac";
 
 export type TicketFilters = {
   q?: string;
-  status?: string;
+  statusId?: string;
   priority?: string;
-  category?: string;
+  categoryId?: string;
   departmentId?: string;
   assigneeId?: string;
   labelId?: string;
@@ -31,14 +31,15 @@ export function buildTicketWhere(
       OR: [
         { subject: { contains: q, mode: "insensitive" } },
         { description: { contains: q, mode: "insensitive" } },
+        { referenceId: { contains: q, mode: "insensitive" } },
         { comments: { some: { body: { contains: q, mode: "insensitive" } } } },
         ...(Number.isInteger(asNumber) ? [{ number: asNumber }] : []),
       ],
     });
   }
-  if (f.status) and.push({ status: f.status as TicketStatus });
+  if (f.statusId) and.push({ statusId: f.statusId });
   if (f.priority) and.push({ priority: f.priority as Priority });
-  if (f.category) and.push({ category: f.category as TicketCategory });
+  if (f.categoryId) and.push({ categoryId: f.categoryId });
   if (f.departmentId) and.push({ assignedDepartmentId: f.departmentId });
   if (f.assigneeId) and.push({ assigneeId: f.assigneeId });
   if (f.slaState) and.push({ slaState: f.slaState as Prisma.EnumSlaStateFilter });
@@ -56,6 +57,8 @@ export function buildTicketWhere(
 }
 
 export const ticketListInclude = {
+  status: true,
+  category: true,
   customer: true,
   assignee: true,
   assignedDepartment: true,

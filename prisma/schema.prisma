@@ -14,41 +14,20 @@ datasource db {
 // Enums
 // ---------------------------------------------------------------------------
 
-enum Role {
-  CS_AGENT
-  CS_MANAGER
-  OPS
-  FINANCE
-  TECH
-  SALES
-  SYSTEM_ADMIN
+// Visibility scope a role grants over tickets.
+enum TicketScope {
+  OWN // only tickets the user created
+  DEPARTMENT // tickets routed to the user's department
+  CS_CREATED // all tickets created by the Customer Support department + own assignments
+  ALL // everything
 }
 
-enum DepartmentKey {
-  CS
-  OPS
-  FINANCE
-  TECH
-  SALES
-  MANAGEMENT
-}
-
-enum TicketCategory {
-  RETURN_REPLACE
-  REFUND_COMPENSATE
-  TECHNICAL_ISSUE
-  FOLLOW_UP
-  ESCALATION
-}
-
-enum TicketStatus {
-  NEW
-  OPEN
-  IN_PROGRESS
-  PENDING
+// Lifecycle bucket a (configurable) status belongs to. Drives SLA stop and
+// resolved/closed timestamps.
+enum StatusKind {
+  ACTIVE
   RESOLVED
   CLOSED
-  REOPENED
 }
 
 enum Priority {
@@ -134,27 +113,73 @@ model VerificationToken {
 // Domain models
 // ---------------------------------------------------------------------------
 
-model Department {
-  id   String        @id @default(cuid())
-  key  DepartmentKey @unique
-  name String
-  slug String        @unique
+// Configurable role with a visibility scope and permission flags.
+model Role {
+  id                   String      @id @default(cuid())
+  name                 String      @unique
+  slug                 String      @unique
+  scope                TicketScope @default(OWN)
+  canCreateTickets     Boolean     @default(false)
+  canRoute             Boolean     @default(false) // change category, link, merge
+  canViewDashboard     Boolean     @default(false) // oversight dashboard
+  canAdminister        Boolean     @default(false) // manage users + all config
+  isEscalationAssignee Boolean     @default(false) // receives ESCALATION tickets
+  isSystem             Boolean     @default(false) // built-in; cannot be deleted
+  order                Int         @default(0)
 
-  users           User[]
-  assignedTickets Ticket[] @relation("AssignedDepartment")
+  users User[]
+}
+
+model Department {
+  id                String  @id @default(cuid())
+  name              String  @unique
+  slug              String  @unique
+  isCustomerSupport Boolean @default(false) // identifies the CS team for CS_CREATED scope
+  order             Int     @default(0)
+
+  users                User[]
+  assignedTickets      Ticket[]   @relation("AssignedDepartment")
+  defaultForCategories Category[]
+}
+
+// Configurable ticket status.
+model Status {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  slug      String     @unique
+  color     String     @default("#64748b")
+  kind      StatusKind @default(ACTIVE)
+  isDefault Boolean    @default(false) // applied to new tickets
+  order     Int        @default(0)
+
+  tickets Ticket[]
+}
+
+// Configurable ticket category with auto-routing target.
+model Category {
+  id                  String  @id @default(cuid())
+  name                String  @unique
+  slug                String  @unique
+  defaultDepartmentId String
+  isEscalation        Boolean @default(false) // route to escalation-assignee role
+  order               Int     @default(0)
+
+  defaultDepartment Department @relation(fields: [defaultDepartmentId], references: [id])
+  tickets           Ticket[]
 }
 
 model User {
-  id           String   @id @default(cuid())
-  name         String?
-  email        String   @unique
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
   emailVerified DateTime?
-  image        String?
-  role         Role     @default(CS_AGENT)
-  departmentId String?
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
+  image         String?
+  roleId        String?
+  departmentId  String?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
 
+  role       Role?       @relation(fields: [roleId], references: [id])
   department Department? @relation(fields: [departmentId], references: [id])
 
   accounts Account[]
@@ -174,7 +199,7 @@ model Customer {
   id        String   @id @default(cuid())
   name      String
   email     String?
-  phone     String?
+  phone     String? // mobile number
   notes     String?  @db.Text
   createdAt DateTime @default(now())
 
@@ -182,14 +207,15 @@ model Customer {
 }
 
 model Ticket {
-  id          String         @id @default(cuid())
-  number      Int            @unique @default(autoincrement())
+  id          String   @id @default(cuid())
+  number      Int      @unique @default(autoincrement())
+  referenceId String? // external/human reference (e.g. order or RMA number)
   subject     String
-  description String         @db.Text
-  status      TicketStatus   @default(NEW)
-  priority    Priority       @default(NORMAL)
-  category    TicketCategory
+  description String   @db.Text
+  priority    Priority @default(NORMAL)
 
+  statusId             String
+  categoryId           String
   customerId           String?
   createdById          String
   assigneeId           String?
@@ -212,23 +238,25 @@ model Ticket {
   mergedInto         Ticket?  @relation("Merge", fields: [mergedIntoTicketId], references: [id])
   mergedFrom         Ticket[] @relation("Merge")
 
-  customer           Customer?   @relation(fields: [customerId], references: [id])
-  createdBy          User        @relation("CreatedBy", fields: [createdById], references: [id])
-  assignee           User?       @relation("Assignee", fields: [assigneeId], references: [id])
-  assignedDepartment Department  @relation("AssignedDepartment", fields: [assignedDepartmentId], references: [id])
+  status             Status     @relation(fields: [statusId], references: [id])
+  category           Category   @relation(fields: [categoryId], references: [id])
+  customer           Customer?  @relation(fields: [customerId], references: [id])
+  createdBy          User       @relation("CreatedBy", fields: [createdById], references: [id])
+  assignee           User?      @relation("Assignee", fields: [assigneeId], references: [id])
+  assignedDepartment Department @relation("AssignedDepartment", fields: [assignedDepartmentId], references: [id])
 
-  comments     Comment[]
-  attachments  Attachment[]
-  labels       TicketLabel[]
-  watchers     Watcher[]
+  comments      Comment[]
+  attachments   Attachment[]
+  labels        TicketLabel[]
+  watchers      Watcher[]
   notifications Notification[]
-  activityLogs ActivityLog[]
-  emails       EmailMessage[]
+  activityLogs  ActivityLog[]
+  emails        EmailMessage[]
 
   outgoingLinks TicketLink[] @relation("SourceTicket")
   incomingLinks TicketLink[] @relation("TargetTicket")
 
-  @@index([assignedDepartmentId, status])
+  @@index([assignedDepartmentId, statusId])
   @@index([createdById])
   @@index([assigneeId])
   @@index([slaState])

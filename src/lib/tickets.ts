@@ -1,34 +1,63 @@
 import {
   NotificationType,
   Priority,
-  Role,
-  TicketCategory,
+  Prisma,
+  StatusKind,
   TicketLinkType,
-  TicketStatus,
 } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/activity";
 import { addWatchers, getWatcherIds, notifyUsers } from "@/lib/notify";
 import { computeDueDates, deriveSlaState, getSlaTargets } from "@/lib/sla";
-import { CATEGORY_DEPARTMENT, STATUS_LABEL, PRIORITY_LABEL, CATEGORY_LABEL } from "@/lib/domain";
+import { PRIORITY_LABEL } from "@/lib/domain";
 import { SessionUser, canRoute } from "@/lib/rbac";
-import { TERMINAL_STATUSES } from "@/lib/domain";
+
+type Tx = Prisma.TransactionClient;
 
 export const createTicketSchema = z.object({
   subject: z.string().min(3).max(200),
   description: z.string().min(1),
-  category: z.nativeEnum(TicketCategory),
+  referenceId: z.string().optional(),
+  categoryId: z.string().min(1),
   priority: z.nativeEnum(Priority).default(Priority.NORMAL),
+  departmentId: z.string().optional(), // manual routing override
+  assigneeId: z.string().optional(),
   customerName: z.string().optional(),
   customerEmail: z.string().email().optional().or(z.literal("")),
+  customerPhone: z.string().optional(),
   labelIds: z.array(z.string()).optional(),
 });
 
-async function departmentIdForKey(key: (typeof CATEGORY_DEPARTMENT)[TicketCategory]) {
-  const dept = await prisma.department.findUniqueOrThrow({ where: { key } });
-  return dept.id;
+// --- shared lookups -------------------------------------------------------
+
+async function getDefaultStatus(tx: Tx) {
+  return (
+    (await tx.status.findFirst({ where: { isDefault: true } })) ??
+    (await tx.status.findFirstOrThrow({ orderBy: { order: "asc" } }))
+  );
 }
+
+async function getClosedStatus(tx: Tx) {
+  return (
+    (await tx.status.findFirst({
+      where: { kind: StatusKind.CLOSED },
+      orderBy: { order: "asc" },
+    })) ?? null
+  );
+}
+
+/** The user who receives escalations (first active holder of such a role). */
+async function getEscalationAssigneeId(tx: Tx) {
+  const u = await tx.user.findFirst({
+    where: { isActive: true, role: { isEscalationAssignee: true } },
+  });
+  return u?.id ?? null;
+}
+
+const isTerminalKind = (kind: StatusKind) => kind !== StatusKind.ACTIVE;
+
+// --- mutations ------------------------------------------------------------
 
 /** Create a ticket, auto-route to its department, set SLA, watch the creator. */
 export async function createTicket(
@@ -36,16 +65,18 @@ export async function createTicket(
   input: z.infer<typeof createTicketSchema>,
 ) {
   const data = createTicketSchema.parse(input);
-  const deptKey = CATEGORY_DEPARTMENT[data.category];
-  const assignedDepartmentId = await departmentIdForKey(deptKey);
 
-  // Escalations go straight to the CS Manager.
-  let assigneeId: string | null = null;
-  if (data.category === TicketCategory.ESCALATION) {
-    const manager = await prisma.user.findFirst({
-      where: { role: Role.CS_MANAGER, isActive: true },
-    });
-    assigneeId = manager?.id ?? null;
+  const category = await prisma.category.findUniqueOrThrow({
+    where: { id: data.categoryId },
+  });
+
+  // Routing: manual override wins, else the category's default department.
+  const assignedDepartmentId = data.departmentId || category.defaultDepartmentId;
+
+  // Assignee: explicit pick, else escalation-assignee for escalation categories.
+  let assigneeId: string | null = data.assigneeId || null;
+  if (!assigneeId && category.isEscalation) {
+    assigneeId = await getEscalationAssigneeId(prisma);
   }
 
   const targets = await getSlaTargets(prisma, data.priority);
@@ -54,19 +85,26 @@ export async function createTicket(
   let customerId: string | null = null;
   if (data.customerName) {
     const customer = await prisma.customer.create({
-      data: { name: data.customerName, email: data.customerEmail || null },
+      data: {
+        name: data.customerName,
+        email: data.customerEmail || null,
+        phone: data.customerPhone || null,
+      },
     });
     customerId = customer.id;
   }
 
   return prisma.$transaction(async (tx) => {
+    const status = await getDefaultStatus(tx);
+
     const ticket = await tx.ticket.create({
       data: {
         subject: data.subject,
         description: data.description,
-        category: data.category,
+        referenceId: data.referenceId || null,
+        categoryId: category.id,
         priority: data.priority,
-        status: TicketStatus.NEW,
+        statusId: status.id,
         createdById: user.id,
         assigneeId,
         assignedDepartmentId,
@@ -83,7 +121,7 @@ export async function createTicket(
       ticketId: ticket.id,
       actorId: user.id,
       action: "created",
-      toValue: CATEGORY_LABEL[data.category],
+      toValue: category.name,
     });
 
     await addWatchers(tx, ticket.id, [user.id, assigneeId ?? ""].filter(Boolean));
@@ -91,10 +129,9 @@ export async function createTicket(
     if (assigneeId) {
       await notifyUsers(tx, {
         userIds: [assigneeId],
-        type:
-          data.category === TicketCategory.ESCALATION
-            ? NotificationType.ESCALATED
-            : NotificationType.ASSIGNED,
+        type: category.isEscalation
+          ? NotificationType.ESCALATED
+          : NotificationType.ASSIGNED,
         ticketId: ticket.id,
         message: `You were assigned ticket "${ticket.subject}"`,
         excludeUserId: user.id,
@@ -111,6 +148,8 @@ export async function getTicketForUser(user: SessionUser, number: number) {
   return prisma.ticket.findFirst({
     where: { AND: [{ number }, ticketScope(user)] },
     include: {
+      status: true,
+      category: true,
       customer: true,
       createdBy: true,
       assignee: true,
@@ -209,23 +248,30 @@ export async function addComment(
 export async function changeStatus(
   user: SessionUser,
   ticketId: string,
-  status: TicketStatus,
+  statusId: string,
 ) {
   const ticket = await assertCanModify(user, ticketId);
-  if (ticket.status === status) return ticket;
+  if (ticket.statusId === statusId) return ticket;
+
+  const [fromStatus, toStatus] = await Promise.all([
+    prisma.status.findUnique({ where: { id: ticket.statusId } }),
+    prisma.status.findUniqueOrThrow({ where: { id: statusId } }),
+  ]);
 
   return prisma.$transaction(async (tx) => {
-    const resolvedAt = status === TicketStatus.RESOLVED ? new Date() : ticket.resolvedAt;
-    const closedAt = status === TicketStatus.CLOSED ? new Date() : ticket.closedAt;
+    const resolvedAt =
+      toStatus.kind === StatusKind.RESOLVED ? new Date() : ticket.resolvedAt;
+    const closedAt =
+      toStatus.kind === StatusKind.CLOSED ? new Date() : ticket.closedAt;
 
     const updated = await tx.ticket.update({
       where: { id: ticketId },
       data: {
-        status,
+        statusId,
         resolvedAt,
         closedAt,
         slaState: deriveSlaState({
-          status,
+          isTerminal: isTerminalKind(toStatus.kind),
           firstRespondedAt: ticket.firstRespondedAt,
           slaFirstResponseDueAt: ticket.slaFirstResponseDueAt,
           slaResolutionDueAt: ticket.slaResolutionDueAt,
@@ -237,8 +283,8 @@ export async function changeStatus(
       ticketId,
       actorId: user.id,
       action: "changed status",
-      fromValue: STATUS_LABEL[ticket.status],
-      toValue: STATUS_LABEL[status],
+      fromValue: fromStatus?.name ?? null,
+      toValue: toStatus.name,
     });
 
     const watcherIds = await getWatcherIds(tx, ticketId);
@@ -246,7 +292,7 @@ export async function changeStatus(
       userIds: watcherIds,
       type: NotificationType.STATUS_CHANGED,
       ticketId,
-      message: `"${ticket.subject}" → ${STATUS_LABEL[status]}`,
+      message: `"${ticket.subject}" → ${toStatus.name}`,
       excludeUserId: user.id,
     });
 
@@ -312,30 +358,33 @@ export async function assignTicket(
   });
 }
 
-/** Re-route a ticket to a different department/category (CS + admin only). */
+/** Re-route a ticket to a different category/department (route permission). */
 export async function routeTicket(
   user: SessionUser,
   ticketId: string,
-  opts: { category?: TicketCategory; departmentId?: string },
+  opts: { categoryId?: string; departmentId?: string },
 ) {
   if (!canRoute(user)) throw new Error("Not permitted to route");
   const ticket = await assertCanModify(user, ticketId);
 
-  const category = opts.category ?? ticket.category;
-  const departmentId =
-    opts.departmentId ?? (await departmentIdForKey(CATEGORY_DEPARTMENT[category]));
+  const categoryId = opts.categoryId ?? ticket.categoryId;
+  const [fromCategory, toCategory] = await Promise.all([
+    prisma.category.findUnique({ where: { id: ticket.categoryId } }),
+    prisma.category.findUniqueOrThrow({ where: { id: categoryId } }),
+  ]);
+  const departmentId = opts.departmentId ?? toCategory.defaultDepartmentId;
 
   return prisma.$transaction(async (tx) => {
     const updated = await tx.ticket.update({
       where: { id: ticketId },
-      data: { category, assignedDepartmentId: departmentId },
+      data: { categoryId, assignedDepartmentId: departmentId },
     });
     await logActivity(tx, {
       ticketId,
       actorId: user.id,
       action: "re-routed",
-      fromValue: CATEGORY_LABEL[ticket.category],
-      toValue: CATEGORY_LABEL[category],
+      fromValue: fromCategory?.name ?? null,
+      toValue: toCategory.name,
     });
     return updated;
   });
@@ -414,9 +463,14 @@ export async function mergeTicket(
     const watchers = await tx.watcher.findMany({ where: { ticketId: sourceTicketId } });
     await addWatchers(tx, target.id, watchers.map((w) => w.userId));
 
+    const closed = await getClosedStatus(tx);
     await tx.ticket.update({
       where: { id: sourceTicketId },
-      data: { status: TicketStatus.CLOSED, closedAt: new Date(), mergedIntoTicketId: target.id },
+      data: {
+        statusId: closed?.id ?? source.statusId,
+        closedAt: new Date(),
+        mergedIntoTicketId: target.id,
+      },
     });
 
     await logActivity(tx, {
@@ -434,5 +488,3 @@ export async function mergeTicket(
     return target;
   });
 }
-
-export { TERMINAL_STATUSES };

@@ -1,18 +1,14 @@
-import { Role } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { Card, CardBody, CardHeader, Input, Select } from "@/components/ui/primitives";
 import { Button } from "@/components/ui/button";
-import { DEPARTMENT_LABEL } from "@/lib/domain";
 import { upsertUserAction } from "@/app/(portal)/admin/actions";
 
 export default async function AdminUsersPage() {
-  const [users, departments] = await Promise.all([
-    prisma.user.findMany({ orderBy: { createdAt: "asc" }, include: { department: true } }),
-    prisma.department.findMany({ orderBy: { name: "asc" } }),
+  const [users, departments, roles] = await Promise.all([
+    prisma.user.findMany({ orderBy: { createdAt: "asc" }, include: { department: true, role: true } }),
+    prisma.department.findMany({ orderBy: { order: "asc" } }),
+    prisma.role.findMany({ orderBy: { order: "asc" } }),
   ]);
-
-  const deptOptions = departments.map((d) => ({ id: d.id, label: DEPARTMENT_LABEL[d.key] }));
-  const roleOptions = Object.values(Role);
 
   return (
     <div className="space-y-4">
@@ -30,15 +26,16 @@ export default async function AdminUsersPage() {
             </div>
             <div className="w-40">
               <label className="text-xs text-muted">Role</label>
-              <Select name="role" defaultValue={Role.CS_AGENT}>
-                {roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
+              <Select name="roleId" defaultValue="">
+                <option value="">No role</option>
+                {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
               </Select>
             </div>
             <div className="w-40">
               <label className="text-xs text-muted">Department</label>
               <Select name="departmentId" defaultValue="">
                 <option value="">None</option>
-                {deptOptions.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
+                {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
               </Select>
             </div>
             <label className="flex items-center gap-1 text-sm">
@@ -60,16 +57,15 @@ export default async function AdminUsersPage() {
             >
               <input type="hidden" name="id" value={u.id} />
               <input type="hidden" name="email" value={u.email} />
-              <div className="w-56">
-                <div className="text-sm font-medium">{u.email}</div>
-              </div>
+              <div className="w-56 text-sm font-medium">{u.email}</div>
               <Input name="name" defaultValue={u.name ?? ""} className="w-40" />
-              <Select name="role" defaultValue={u.role} className="w-44">
-                {roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
+              <Select name="roleId" defaultValue={u.roleId ?? ""} className="w-44">
+                <option value="">No role</option>
+                {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
               </Select>
               <Select name="departmentId" defaultValue={u.departmentId ?? ""} className="w-40">
                 <option value="">None</option>
-                {deptOptions.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
+                {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
               </Select>
               <label className="flex items-center gap-1 text-sm">
                 <input type="checkbox" name="isActive" defaultChecked={u.isActive} /> Active

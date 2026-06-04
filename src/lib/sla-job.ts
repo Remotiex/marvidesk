@@ -1,9 +1,8 @@
-import { NotificationType, Priority, Role, SlaState } from "@prisma/client";
+import { NotificationType, Priority, SlaState, StatusKind } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { deriveSlaState } from "@/lib/sla";
 import { logActivity } from "@/lib/activity";
 import { getWatcherIds, notifyUsers } from "@/lib/notify";
-import { TERMINAL_STATUSES } from "@/lib/domain";
 
 const ESCALATE: Record<Priority, Priority> = {
   LOW: Priority.NORMAL,
@@ -14,19 +13,20 @@ const ESCALATE: Record<Priority, Priority> = {
 
 /**
  * Recompute SLA state for all open tickets. On transition to AT_RISK/BREACHED,
- * notify watchers; on first breach, auto-escalate (raise priority + notify CS
- * Manager). Designed to be run periodically by the worker.
+ * notify watchers; on first breach, auto-escalate (raise priority + notify the
+ * escalation-assignee role). Run periodically by the worker.
  */
 export async function recomputeSlaStates() {
+  // Only active-status tickets have a running SLA clock.
   const tickets = await prisma.ticket.findMany({
-    where: { status: { notIn: TERMINAL_STATUSES } },
+    where: { status: { kind: StatusKind.ACTIVE } },
   });
   const now = new Date();
   let changed = 0;
 
   for (const t of tickets) {
     const next = deriveSlaState({
-      status: t.status,
+      isTerminal: false, // already filtered to ACTIVE statuses
       firstRespondedAt: t.firstRespondedAt,
       slaFirstResponseDueAt: t.slaFirstResponseDueAt,
       slaResolutionDueAt: t.slaResolutionDueAt,
@@ -51,8 +51,8 @@ export async function recomputeSlaStates() {
 
       if (next === SlaState.BREACHED && t.slaState !== SlaState.BREACHED) {
         const newPriority = ESCALATE[t.priority];
-        const manager = await tx.user.findFirst({
-          where: { role: Role.CS_MANAGER, isActive: true },
+        const escalationUser = await tx.user.findFirst({
+          where: { isActive: true, role: { isEscalationAssignee: true } },
         });
         await tx.ticket.update({
           where: { id: t.id },
@@ -65,7 +65,7 @@ export async function recomputeSlaStates() {
           toValue: newPriority,
         });
         const recipients = [...watcherIds];
-        if (manager) recipients.push(manager.id);
+        if (escalationUser) recipients.push(escalationUser.id);
         await notifyUsers(tx, {
           userIds: recipients,
           type: NotificationType.SLA_BREACHED,
